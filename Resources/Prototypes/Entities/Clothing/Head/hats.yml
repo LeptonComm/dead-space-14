@@ -1314,9 +1314,9 @@
     tags:
     - BrimFlatcapGrey
   - type: Sprite
-    sprite: Clothing/Head/Hats/greyflatcap.rsi
+    sprite: _DeadSpace/Clothing/Head/Hats/greyflatcap.rsi #_DS14
   - type: Clothing
-    sprite: Clothing/Head/Hats/greyflatcap.rsi
+    sprite: _DeadSpace/Clothing/Head/Hats/greyflatcap.rsi #_DS14
 
 - type: entity
   parent: ClothingHeadBase
@@ -1328,9 +1328,9 @@
     tags:
     - BrimFlatcapBrown
   - type: Sprite
-    sprite: Clothing/Head/Hats/brownflatcap.rsi
+    sprite: _DeadSpace/Clothing/Head/Hats/brownflatcap.rsi #_DS14
   - type: Clothing
-    sprite: Clothing/Head/Hats/brownflatcap.rsi
+    sprite: _DeadSpace/Clothing/Head/Hats/brownflatcap.rsi #_DS14
 
 - type: entity
   parent: ClothingHeadBase
