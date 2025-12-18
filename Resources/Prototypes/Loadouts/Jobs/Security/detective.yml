@@ -14,7 +14,7 @@
   equipment:
     head: ClothingHeadHatGreyFlatcap
 
-- type: loadout #f DS14
+- type: loadout # DS14
   id: DetectiveBrownFlatCap
   equipment:
     head: ClothingHeadHatBrownFlatcap
