@@ -9,12 +9,12 @@
   equipment:
     head: ClothingHeadHatFedoraGrey
 
-- type: loadout #from _DS14
+- type: loadout # DS14
   id: DetectiveGreyFlatCap
   equipment:
     head: ClothingHeadHatGreyFlatcap
 
-- type: loadout #from _DS14
+- type: loadout #f DS14
   id: DetectiveBrownFlatCap
   equipment:
     head: ClothingHeadHatBrownFlatcap
