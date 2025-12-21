@@ -1,5 +1,6 @@
 // Мёртвый Космос, Licensed under custom terms with restrictions on public hosting and commercial use, full text: https://raw.githubusercontent.com/dead-space-server/space-station-14-fobos/master/LICENSE.TXT
 
+using System.Collections.Generic;
 using System.Linq;
 using Content.Shared.DeadSpace.Virus.Components;
 using Content.Shared.DeadSpace.Virus.Symptoms;
@@ -22,6 +23,7 @@ using Content.Shared.Chemistry.Reagent;
 using Content.Shared.DeadSpace.Virus.Prototypes;
 using Content.Shared.Body.Prototypes;
 using Content.Shared.Mobs.Systems;
+using Content.Shared.Examine;
 
 namespace Content.Server.DeadSpace.Virus.Systems;
 
@@ -37,6 +39,7 @@ public sealed partial class VirusSystem : SharedVirusSystem
     [Dependency] private readonly TagSystem _tag = default!;
     [Dependency] private readonly MobStateSystem _mobState = default!;
     [Dependency] private readonly VirusDiagnoserDataServerSystem _virusDiagnoserDataServer = default!;
+    [Dependency] private readonly ExamineSystemShared _examine = default!;
     private ISawmill _sawmill = default!;
 
     /// <summary>
@@ -190,23 +193,43 @@ public sealed partial class VirusSystem : SharedVirusSystem
         if (!Resolve(host, ref host.Comp, false))
             return;
 
-        if (host.Comp.Data.ActiveSymptom == null || host.Comp.Data.ActiveSymptom.Count <= 0)
-            return;
-
-        foreach (var protoSymptom in host.Comp.Data.ActiveSymptom)
+        // Собираем активные типы симптомов из данных вируса
+        var activeTypes = new HashSet<VirusSymptom>();
+        if (host.Comp.Data.ActiveSymptom != null)
         {
-            if (!_prototype.TryIndex(protoSymptom, out var symptom))
+            foreach (var protoSymptom in host.Comp.Data.ActiveSymptom)
+            {
+                if (_prototype.TryIndex(protoSymptom, out var symptom))
+                    activeTypes.Add(symptom.SymptomType);
+            }
+        }
+
+        // Удаляем симптомы, которых больше нет в ActiveSymptom
+        for (var i = host.Comp.ActiveSymptomInstances.Count - 1; i >= 0; i--)
+        {
+            var instance = host.Comp.ActiveSymptomInstances[i];
+            if (!activeTypes.Contains(instance.Type))
+            {
+                if (CanManifestInHost((host, host.Comp)))
+                    instance.OnRemoved(host, host.Comp);
+                host.Comp.ActiveSymptomInstances.RemoveAt(i);
+            }
+        }
+
+        // Добавляем новые симптомы
+        foreach (var symptomType in activeTypes)
+        {
+            if (host.Comp.ActiveSymptomInstances.Any(s => s.Type == symptomType))
                 continue;
 
-            var symptomInstance = CreateSymptomInstance(symptom.SymptomType);
-
-            // Проверяем, есть ли уже экземпляр этого типа симптома
-            if (host.Comp.ActiveSymptomInstances.Any(s => s.Type == symptom.SymptomType))
-                continue;
-
+            var symptomInstance = CreateSymptomInstance(symptomType);
             host.Comp.ActiveSymptomInstances.Add(symptomInstance);
 
-            symptomInstance.OnAdded(host, host.Comp);
+            if (CanManifestInHost((host, host.Comp)))
+            {
+                _sawmill.Debug($"Добавлен ActiveSymptomInstance {symptomInstance.ToString()} к сущности {host.Owner}.");
+                symptomInstance.OnAdded(host, host.Comp);
+            }
         }
     }
 
@@ -228,6 +251,12 @@ public sealed partial class VirusSystem : SharedVirusSystem
             if (target == host)
                 continue;
 
+            var hostPosition = _transform.GetMapCoordinates(host);
+            var targetPosition = _transform.GetMapCoordinates(target);
+
+            if (!_examine.InRangeUnOccluded(hostPosition, targetPosition, range, null))
+                continue;
+
             ProbInfect((host, component), target);
         }
     }
@@ -245,6 +274,12 @@ public sealed partial class VirusSystem : SharedVirusSystem
 
     public void ProbInfect(VirusData data, EntityUid target, EntityUid? host = null)
     {
+        var ev = new ProbInfectAttemptEvent(target, false, host);
+        RaiseLocalEvent(target, ev);
+
+        if (ev.Cancel)
+            return;
+
         if (!CanInfect(target, data) && !_tag.HasTag(target, IgnoreCanInfectTag))
             return;
 
@@ -274,7 +309,7 @@ public sealed partial class VirusSystem : SharedVirusSystem
         if (!Resolve(source, ref source.Comp, false))
             return;
 
-        InfectEntity(source.Comp.Data, source);
+        InfectEntity(source.Comp.Data, target);
     }
 
     public void InfectEntity(VirusData data, EntityUid target)
@@ -296,7 +331,7 @@ public sealed partial class VirusSystem : SharedVirusSystem
 
         // В любом случае копируем остальные данные (например, симптомы, тела и т.п.)
         var targetComp = EnsureComp<VirusComponent>(target);
-        targetComp.Data = (VirusData)data.Clone();
+        targetComp.Data = localData;
 
         RaiseLocalEvent(target, new CauseVirusEvent(target));
     }
@@ -305,7 +340,7 @@ public sealed partial class VirusSystem : SharedVirusSystem
     {
         foreach (var kvp in source.MedicineResistance)
         {
-            if (source.MedicineResistance.TryGetValue(kvp.Key, out var existingValue))
+            if (target.MedicineResistance.TryGetValue(kvp.Key, out var existingValue))
             {
                 // Берём лучший (максимальный) коэффициент
                 target.MedicineResistance[kvp.Key] = Math.Max(existingValue, kvp.Value);
@@ -543,81 +578,82 @@ public sealed partial class VirusSystem : SharedVirusSystem
     /// <summary>
     ///     Нужно добавить новый тип вируса в этот switch.
     /// </summary>
-    private IVirusSymptom CreateSymptomInstance(VirusSymptom type)
+    public IVirusSymptom CreateSymptomInstance(VirusSymptom type)
     {
+        var newWindow = DefaultSymptomWindow.Clone();
         return type switch
         {
             VirusSymptom.Cough =>
-                new CoughSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new CoughSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.Vomit =>
-                new VomitSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new VomitSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.Rash =>
-                new RashSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new RashSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.Drowsiness =>
-                new DrowsinessSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new DrowsinessSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.Necrosis =>
-                new NecrosisSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new NecrosisSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.Zombification =>
-                new ZombificationSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new ZombificationSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.LowComplexityChange =>
-                new LowComplexityChangeSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new LowComplexityChangeSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.MedComplexityChange =>
-                new MedComplexityChangeSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new MedComplexityChangeSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.LowPostMortemResistance =>
-                new LowPostMortemResistanceSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new LowPostMortemResistanceSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.MedPostMortemResistance =>
-                new MedPostMortemResistanceSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new MedPostMortemResistanceSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.LowViralRegeneration =>
-                new LowViralRegenerationSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new LowViralRegenerationSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.MedViralRegeneration =>
-                new MedViralRegenerationSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new MedViralRegenerationSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.LowMutationAcceleration =>
-                new LowMutationAccelerationSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new LowMutationAccelerationSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.MedMutationAcceleration =>
-                new MedMutationAccelerationSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new MedMutationAccelerationSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.LowPathogenFortress =>
-                new LowPathogenFortressSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new LowPathogenFortressSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.MedPathogenFortress =>
-                new MedPathogenFortressSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new MedPathogenFortressSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.LowChemicalAdaptation =>
-                new LowChemicalAdaptationSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new LowChemicalAdaptationSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.MedChemicalAdaptation =>
-                new MedChemicalAdaptationSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new MedChemicalAdaptationSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.AggressiveTransmission =>
-                new AggressiveTransmissionSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new AggressiveTransmissionSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.NeuroSpike =>
-                new NeuroSpikeSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new NeuroSpikeSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.VocalDisruption =>
-                new VocalDisruptionSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new VocalDisruptionSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.Asphyxia =>
-                new AsphyxiaSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new AsphyxiaSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.Blindable =>
-                new BlindableSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new BlindableSymptom(EntityManager, _timing, _random, newWindow),
 
             VirusSymptom.ParalyzedLegs =>
-                new ParalyzedLegsSymptom(EntityManager, _timing, _random, DefaultSymptomWindow),
+                new ParalyzedLegsSymptom(EntityManager, _timing, _random, newWindow),
 
             _ => throw new ArgumentOutOfRangeException(
                 nameof(type),
@@ -677,7 +713,9 @@ public sealed partial class VirusSystem : SharedVirusSystem
             return symptom; // возвращаем существующий симптом, если он уже есть
 
         entity.Comp.ActiveSymptomInstances.Add(symptom);
-        symptom.OnAdded(entity.Owner, entity.Comp);
+
+        if (CanManifestInHost((entity.Owner, entity.Comp)))
+            symptom.OnAdded(entity.Owner, entity.Comp);
 
         _sawmill.Debug($"Добавлен симптом {typeof(T).Name} к сущности {entity.Owner}.");
 

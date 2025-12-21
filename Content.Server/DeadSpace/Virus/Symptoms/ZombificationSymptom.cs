@@ -50,10 +50,11 @@ public sealed class ZombificationSymptom : VirusSymptomBase
             return;
 
         EntityManager.EnsureComponent<PendingZombieComponent>(target);
+        EntityManager.EnsureComponent<ZombifyOnDeathComponent>(target);
     }
 
     public override IVirusSymptom Clone()
     {
-        return new ZombificationSymptom(EntityManager, Timing, Random, CloneTimedWindow());
+        return new ZombificationSymptom(EntityManager, Timing, Random, EffectTimedWindow.Clone());
     }
 }
