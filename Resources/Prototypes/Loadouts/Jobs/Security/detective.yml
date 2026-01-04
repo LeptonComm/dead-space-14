@@ -9,16 +9,6 @@
   equipment:
     head: ClothingHeadHatFedoraGrey
 
-- type: loadout # DS14
-  id: DetectiveGreyFlatCap
-  equipment:
-    head: ClothingHeadHatGreyFlatcap
-
-- type: loadout # DS14
-  id: DetectiveBrownFlatCap
-  equipment:
-    head: ClothingHeadHatBrownFlatcap
-
 # Neck
 - type: loadout
   id: DetectiveTie
